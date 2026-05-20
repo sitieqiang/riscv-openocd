@@ -28,6 +28,7 @@
 #include <jtag/swd.h>
 #include <jtag/commands.h>
 #include <jtag/adapter.h>
+#include <transport/transport.h>
 #include <helper/replacements.h>
 #include <target/cortex_m.h>
 
@@ -46,6 +47,7 @@ static bool use_usb_location;
 static enum jaylink_usb_address usb_address;
 static bool use_usb_address;
 static enum jaylink_target_interface iface = JAYLINK_TIF_JTAG;
+static bool use_cjtag;
 static bool trace_enabled;
 
 #define JLINK_MAX_SPEED			12000
@@ -371,6 +373,28 @@ static bool read_device_config(struct device_config *cfg)
 		cfg->target_power = 0;
 
 	return true;
+}
+
+static bool jlink_transport_is_cjtag(void)
+{
+	struct transport *transport = get_current_transport();
+
+	return transport && !strcmp(transport->name, "cjtag");
+}
+
+static bool jlink_iface_is_jtag(void)
+{
+	return iface == JAYLINK_TIF_JTAG || iface == JAYLINK_TIF_CJTAG;
+}
+
+static void jlink_select_transport_iface(void)
+{
+	if (transport_is_swd())
+		iface = JAYLINK_TIF_SWD;
+	else if (use_cjtag || jlink_transport_is_cjtag())
+		iface = JAYLINK_TIF_CJTAG;
+	else
+		iface = JAYLINK_TIF_JTAG;
 }
 
 static int select_interface(void)
@@ -765,6 +789,8 @@ static int jlink_init(void)
 			jtag_command_version = JAYLINK_JTAG_VERSION_3;
 	}
 
+	jlink_select_transport_iface();
+
 	if (iface == JAYLINK_TIF_SWD) {
 		/*
 		 * Adjust the SWD transaction buffer size in case there is already
@@ -831,7 +857,7 @@ static int jlink_init(void)
 
 	jlink_speed(adapter_get_speed_khz());
 
-	if (iface == JAYLINK_TIF_JTAG) {
+	if (jlink_iface_is_jtag()) {
 		/*
 		 * J-Link devices with firmware version v5 and v6 seems to have an issue
 		 * if the first tap move is not divisible by 8, so we send a TLR on
@@ -1078,6 +1104,22 @@ COMMAND_HANDLER(jlink_handle_jlink_jtag_command)
 		return ERROR_COMMAND_SYNTAX_ERROR;
 	}
 
+	return ERROR_OK;
+}
+
+COMMAND_HANDLER(jlink_handle_cjtag_command)
+{
+	if (CMD_ARGC > 1)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	if (CMD_ARGC == 1) {
+		COMMAND_PARSE_ON_OFF(CMD_ARGV[0], use_cjtag);
+		iface = use_cjtag ? JAYLINK_TIF_CJTAG : JAYLINK_TIF_JTAG;
+	}
+
+	bool enabled = !transport_is_swd() &&
+		(use_cjtag || jlink_transport_is_cjtag());
+	command_print(CMD, "cJTAG mode: %s.", enabled ? "on" : "off");
 	return ERROR_OK;
 }
 
@@ -1883,6 +1925,13 @@ static const struct command_registration jlink_subcommand_handlers[] = {
 		.usage = "[2|3]",
 	},
 	{
+		.name = "cjtag",
+		.handler = &jlink_handle_cjtag_command,
+		.mode = COMMAND_CONFIG,
+		.help = "use the native cJTAG target interface with JTAG operations",
+		.usage = "[on|off]",
+	},
+	{
 		.name = "targetpower",
 		.handler = &jlink_handle_target_power_command,
 		.mode = COMMAND_EXEC,
@@ -2264,7 +2313,7 @@ static const struct swd_driver jlink_swd = {
 	.run = &jlink_swd_run_queue,
 };
 
-static const char * const jlink_transports[] = { "jtag", "swd", NULL };
+static const char * const jlink_transports[] = { "jtag", "swd", "cjtag", NULL };
 
 static struct jtag_interface jlink_interface = {
 	.execute_queue = &jlink_execute_queue,

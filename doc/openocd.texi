@@ -2493,8 +2493,9 @@ This command is only available if your libusb1 is at least version 1.0.16.
 Specifies the @var{serial_string} of the adapter to use.
 If this command is not specified, serial strings are not checked.
 Only the following adapter drivers use the serial string from this command:
-arm-jtag-ew, cmsis_dap, esp_usb_jtag, ft232r, ftdi, hla (ti-icdi), jlink, kitprog, opendus,
-openjtag, osbdm, presto, rlink, st-link, usb_blaster (ublast2), usbprog, vsllink, xds110.
+arm-jtag-ew, cmsis_dap, esp_usb_jtag, ft232r, ftdi, hla (ti-icdi), jlink,
+jlinkdll, kitprog, opendus, openjtag, osbdm, presto, rlink, st-link,
+usb_blaster (ublast2), usbprog, vsllink, xds110.
 @end deffn
 
 @section Interface Drivers
@@ -2964,7 +2965,7 @@ This is a write-once setting.
 @end deffn
 
 @deffn {Interface Driver} {jlink}
-SEGGER J-Link family of USB adapters. It currently supports JTAG and SWD
+SEGGER J-Link family of USB adapters. It currently supports JTAG, cJTAG and SWD
 transports.
 
 @quotation Compatibility Note
@@ -2991,6 +2992,13 @@ Display free device internal memory.
 Set the JTAG command version to be used. Without argument, show the actual JTAG
 command version.
 @end deffn
+@deffn {Command} {jlink cjtag} [@option{on}|@option{off}]
+Select the native cJTAG target interface while using JTAG operations. Without
+argument, show whether cJTAG mode is enabled.
+@end deffn
+The helper configuration file @file{interface/jlink-cjtag.cfg} enables this
+mode. New configurations may alternatively use @command{transport select cjtag};
+the @code{cjtag} transport uses the same JTAG TAP operations as @code{jtag}.
 @deffn {Command} {jlink targetpower}  [@option{0}|@option{1}|@option{on}|@option{off}]
 Switch the 5@ V target power supply on or off.
 Without argument, show the state of the target power supply.
@@ -3048,6 +3056,57 @@ selection via USB address is not always unambiguous. It is recommended to use
 the serial number instead, if possible.
 
 As a configuration command, it can be used only before 'init'.
+@end deffn
+@end deffn
+
+@deffn {Interface Driver} {jlinkdll}
+Windows-only SEGGER J-Link adapter driver using the vendor J-Link DLL loaded at
+run time. It supports the JTAG and cJTAG transports.
+
+This driver is useful when the target interface setup needs behavior implemented
+inside the SEGGER DLL. On 64-bit Windows it loads @file{JLink_x64.dll}; on
+32-bit Windows it loads @file{JLinkARM.dll}. A different path can be selected
+with @command{jlinkdll path}.
+
+Example cJTAG configuration:
+@example
+adapter driver jlinkdll
+jlinkdll path "C:/Program Files/SEGGER/JLink_V942/JLink_x64.dll"
+adapter speed 1000
+jlinkdll device N205
+jlinkdll exec "SetcJTAGInitMode = 1"
+jlinkdll connect on
+transport select cjtag
+@end example
+
+Some RISC-V cJTAG targets require the short cJTAG activation sequence:
+@example
+jlinkdll exec "SetcJTAGInitMode = 1"
+@end example
+
+If @command{jlinkdll connect on} is used, also set a SEGGER device name with
+@command{jlinkdll device}; the generic @code{RISC-V} name may not be sufficient
+for all targets.
+For cJTAG, @command{jlinkdll connect on} is expected because the driver uses
+the DLL-configured JTAG chain for cJTAG IR/DR scans.
+
+@deffn {Config Command} {jlinkdll path} [dll_path]
+Display or set the path to the J-Link DLL. If unset, the driver uses the system
+DLL search path.
+@end deffn
+
+@deffn {Config Command} {jlinkdll device} [device_name]
+Display or set the SEGGER device name passed to the DLL using the
+@code{device =} command string.
+@end deffn
+
+@deffn {Config Command} {jlinkdll connect} [@option{on}|@option{off}]
+Enable or disable @code{JLINKARM_Connect()} during adapter initialization.
+This is disabled by default.
+@end deffn
+
+@deffn {Command} {jlinkdll exec} command_string
+Queue or execute a raw J-Link DLL command string.
 @end deffn
 @end deffn
 

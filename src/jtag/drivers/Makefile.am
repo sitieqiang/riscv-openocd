@@ -61,6 +61,10 @@ DIST_SUBDIRS += %D%/libjaylink
 endif
 endif
 
+if JLINK_DLL
+DRIVERFILES += %D%/jlinkdll.c
+endif
+
 if BITBANG
 DRIVERFILES += %D%/bitbang.c
 endif

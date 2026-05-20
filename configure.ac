@@ -158,6 +158,9 @@ m4_define([LIBGPIOD_ADAPTERS],
 m4_define([LIBJAYLINK_ADAPTERS],
 	[[[jlink], [SEGGER J-Link Programmer], [JLINK]]])
 
+m4_define([WIN32_ADAPTERS],
+	[[[jlink_dll], [SEGGER J-Link DLL Programmer], [JLINK_DLL]]])
+
 m4_define([PCIE_ADAPTERS],
 	[[[xlnx_pcie_xvc], [Xilinx XVC/PCIe], [XLNX_PCIE_XVC]]])
 
@@ -292,7 +295,8 @@ AC_ARG_ADAPTERS([
   LIBGPIOD_ADAPTERS,
   SERIAL_PORT_ADAPTERS,
   PCIE_ADAPTERS,
-  LIBJAYLINK_ADAPTERS
+  LIBJAYLINK_ADAPTERS,
+  WIN32_ADAPTERS
   ],[auto])
 
 AC_ARG_ADAPTERS([DUMMY_ADAPTER],[no])
@@ -413,7 +417,9 @@ AS_CASE([$host_os],
       AS_HELP_STRING([--disable-ftd2xx], [Enable building support for native FTDI D2xx JTAG interface support (without libusb) on Windows.]),
         [build_ftd2xx=$enableval], [build_ftd2xx=yes])
 
-    LDFLAGS="$LDFLAGS -l:ftd2xx.lib"
+    AS_IF([test "x$build_ftd2xx" = "xyes"], [
+      LDFLAGS="$LDFLAGS -l:ftd2xx.lib"
+    ])
   ],
   [
     AS_IF([test "x$build_ftd2xx" = "xyes"], [
@@ -719,7 +725,7 @@ PKG_CHECK_MODULES([LIBGPIOD], [libgpiod < 2.0], [
 		[AC_DEFINE([HAVE_LIBGPIOD1_FLAGS_BIAS], [1], [define if libgpiod v1 has line request flags bias])])
 ], [use_libgpiod=no])
 
-PKG_CHECK_MODULES([LIBJAYLINK], [libjaylink >= 0.2],
+PKG_CHECK_MODULES([LIBJAYLINK], [libjaylink >= 0.3],
 	[use_libjaylink=yes], [use_libjaylink=no])
 
 # Arg $1: An array of adapter triplets, used to derive option and variable names for each adapter.
@@ -752,7 +758,8 @@ PROCESS_ADAPTERS([HIDAPI_USB1_ADAPTERS], ["x$use_hidapi" = "xyes" -a "x$use_libu
 PROCESS_ADAPTERS([LIBFTDI_ADAPTERS], ["x$use_libftdi" = "xyes"], [libftdi])
 PROCESS_ADAPTERS([LIBFTDI_USB1_ADAPTERS], ["x$use_libftdi" = "xyes" -a "x$use_libusb1" = "xyes"], [libftdi and libusb-1.x])
 PROCESS_ADAPTERS([LIBGPIOD_ADAPTERS], ["x$use_libgpiod" = "xyes"], [Linux libgpiod])
-PROCESS_ADAPTERS([LIBJAYLINK_ADAPTERS], ["x$use_internal_libjaylink" = "xyes" -o "x$use_libjaylink" = "xyes"], [libjaylink-0.2])
+PROCESS_ADAPTERS([LIBJAYLINK_ADAPTERS], ["x$use_internal_libjaylink" = "xyes" -o "x$use_libjaylink" = "xyes"], [libjaylink-0.3])
+PROCESS_ADAPTERS([WIN32_ADAPTERS], ["x$is_win32" = "xyes"], [Windows build])
 PROCESS_ADAPTERS([PCIE_ADAPTERS], ["x$is_linux" = "xyes"], [Linux build])
 PROCESS_ADAPTERS([SERIAL_PORT_ADAPTERS], ["x$can_build_buspirate" = "xyes"],
                                          [internal error: validation should happen beforehand])

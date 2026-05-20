@@ -87,6 +87,9 @@ struct adapter_driver *adapter_drivers[] = {
 #if BUILD_JLINK == 1
 		&jlink_adapter_driver,
 #endif
+#if BUILD_JLINK_DLL == 1
+		&jlinkdll_adapter_driver,
+#endif
 #if BUILD_VSLLINK == 1
 		&vsllink_adapter_driver,
 #endif
