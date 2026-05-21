@@ -16,9 +16,14 @@
 #include "helper/binarybuffer.h"
 #include "server/gdb_server.h"
 
+#ifdef HAVE_STRINGS_H
+#include <strings.h>
+#endif
+
 static const struct rtos_type *rtos_types[] = {
 	&threadx_rtos,
 	&freertos_rtos,
+	&liteos_rtos,
 	&ecos_rtos,
 	&linux_rtos,
 	&chibios_rtos,
@@ -122,10 +127,10 @@ int rtos_create(struct jim_getopt_info *goi, struct target *target)
 	if (e != JIM_OK)
 		return e;
 
-	if (strcmp(cp, "none") == 0)
+	if (strcasecmp(cp, "none") == 0)
 		return JIM_OK;
 
-	if (strcmp(cp, "auto") == 0) {
+	if (strcasecmp(cp, "auto") == 0) {
 		/* Auto detect tries to look up all symbols for each RTOS,
 		 * and runs the RTOS driver's _detect() function when GDB
 		 * finds all symbols for any RTOS. See rtos_qsymbol(). */
@@ -137,7 +142,7 @@ int rtos_create(struct jim_getopt_info *goi, struct target *target)
 	}
 
 	for (x = 0; rtos_types[x]; x++)
-		if (strcmp(cp, rtos_types[x]->name) == 0)
+		if (strcasecmp(cp, rtos_types[x]->name) == 0)
 			return os_alloc_create(target, rtos_types[x], cmd_ctx);
 
 	Jim_SetResultFormatted(goi->interp, "Unknown RTOS type %s, try one of: ", cp);

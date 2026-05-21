@@ -5235,7 +5235,7 @@ The value should normally correspond to a static mapping for the
 @var{rtos_type} can be one of @option{auto}, @option{none}, @option{eCos},
 @option{ThreadX}, @option{FreeRTOS}, @option{linux}, @option{ChibiOS},
 @option{embKernel}, @option{mqx}, @option{uCOS-III}, @option{nuttx},
-@option{RIOT}, @option{Zephyr}, @option{rtkernel}
+@option{RIOT}, @option{Zephyr}, @option{rtkernel}, @option{liteos}
 @xref{gdbrtossupport,,RTOS Support}.
 
 @item @code{-defer-examine} -- skip target examination at initial JTAG chain
@@ -13112,6 +13112,7 @@ Currently supported rtos's include:
 @item @option{hwthread} (This is not an actual RTOS. @xref{usingopenocdsmpwithgdb,,Using OpenOCD SMP with GDB}.)
 @item @option{Zephyr}
 @item @option{rtkernel}
+@item @option{liteos}
 @end itemize
 
 At any time, it's possible to drop the selected RTOS using:
@@ -13155,6 +13156,8 @@ _tcb_name_offset.
 _kernel, _kernel_openocd_offsets, _kernel_openocd_size_t_size
 @item rtkernel symbols
 Multiple struct offsets.
+@item liteos symbols
+g_losTask, g_taskCBArray, g_taskMaxNum.
 @end table
 
 For most RTOS supported the above symbols will be exported by default. However for
@@ -13179,6 +13182,12 @@ contrib/rtos-helpers/uCOS-III-openocd.c
 @deffn {Config Command} {freertos_ticktype_size} (2|4|8)
 Pass the size (in bytes) of FreeRTOS TickType_t to OpenOCD. To make sure the
 calculation of offsets and sizes is correct. Defaults to 4.
+@end deffn
+
+@deffn {Config Command} {liteos_tcb_size} bytes
+Pass the size, in bytes, of LiteOS-M LosTaskCB to OpenOCD. Defaults to 128,
+which matches the Nuclei RV32 LiteOS-M task structure without task-structure
+extension fields.
 @end deffn
 
 @anchor{usingopenocdsmpwithgdb}

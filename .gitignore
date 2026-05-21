@@ -115,3 +115,7 @@ GTAGS
 # as clangd to locate header files and use correct $CFLAGS
 compile_commands.json
 build-mingw64-jlink/*
+/build-mingw64/jimtcl
+/build-mingw64-liteos-verify/*
+/build-mingw64-liteos-verify/*
+/build-mingw64/src/jtag/drivers/libjaylink

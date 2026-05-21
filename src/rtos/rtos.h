@@ -180,6 +180,7 @@ extern const struct rtos_type ecos_rtos;
 extern const struct rtos_type embkernel_rtos;
 extern const struct rtos_type freertos_rtos;
 extern const struct rtos_type hwthread_rtos;
+extern const struct rtos_type liteos_rtos;
 extern const struct rtos_type linux_rtos;
 extern const struct rtos_type mqx_rtos;
 extern const struct rtos_type nuttx_rtos;

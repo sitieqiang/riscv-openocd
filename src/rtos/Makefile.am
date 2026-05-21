@@ -12,6 +12,7 @@ noinst_LTLIBRARIES += %D%/librtos.la
 	%D%/rtos_riot_stackings.c \
 	%D%/rtos_nuttx_stackings.c \
 	%D%/FreeRTOS.c \
+	%D%/LiteOS.c \
 	%D%/ThreadX.c \
 	%D%/eCos.c \
 	%D%/linux.c \
