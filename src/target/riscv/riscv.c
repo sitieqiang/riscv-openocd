@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <assert.h>
+#include <ctype.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #ifdef HAVE_CONFIG_H
@@ -559,6 +562,11 @@ static void riscv_deinit_target(struct target *target)
 
 	range_list_t *entry, *tmp;
 	list_for_each_entry_safe(entry, tmp, &info->hide_csr, list) {
+		free(entry->name);
+		free(entry);
+	}
+
+	list_for_each_entry_safe(entry, tmp, &info->gdb_report_csr, list) {
 		free(entry->name);
 		free(entry);
 	}
@@ -3395,6 +3403,7 @@ static int riscv_get_gdb_reg_list_internal(struct target *target,
 		(*reg_list)[i] = &target->reg_cache->reg_list[i];
 		if (is_read &&
 				target->reg_cache->reg_list[i].exist &&
+				!target->reg_cache->reg_list[i].hidden &&
 				!target->reg_cache->reg_list[i].valid) {
 			if (target->reg_cache->reg_list[i].type->get(
 						&target->reg_cache->reg_list[i]) != ERROR_OK)
@@ -4213,6 +4222,42 @@ static bool parse_csr_address(const char *reg_address_str, unsigned int *reg_add
 	return scanned_chars == strlen(reg_address_str);
 }
 
+static bool parse_csr_name(const char *reg_name, unsigned int *reg_addr)
+{
+	if (!strncasecmp(reg_name, "csr_", 4))
+		reg_name += 4;
+
+	static const struct {
+		const char *name;
+		unsigned int number;
+	} csr_names[] = {
+		#define DECLARE_CSR(csr_name, number) { #csr_name, number },
+		#include "encoding.h"
+		#undef DECLARE_CSR
+	};
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(csr_names); i++) {
+		if (!strcasecmp(reg_name, csr_names[i].name)) {
+			*reg_addr = csr_names[i].number;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+static bool parse_reg_address(const char *reg_address_str,
+		const char *reg_type, unsigned int *reg_addr)
+{
+	if (parse_csr_address(reg_address_str, reg_addr))
+		return true;
+
+	if (!strcmp(reg_type, "csr"))
+		return parse_csr_name(reg_address_str, reg_addr);
+
+	return false;
+}
+
 static int parse_reg_ranges_impl(struct list_head *ranges, char *args,
 		const char *reg_type, unsigned int max_val, char ** const name_buffer)
 {
@@ -4228,22 +4273,23 @@ static int parse_reg_ranges_impl(struct list_head *ranges, char *args,
 
 		if (!dash && !equals) {
 			/* Expecting single register number. */
-			if (!parse_csr_address(arg, &low)) {
-				LOG_ERROR("Failed to parse single register number from '%s'.", arg);
+			if (!parse_reg_address(arg, reg_type, &low)) {
+				LOG_ERROR("Failed to parse single %s register number or name from '%s'.",
+						reg_type, arg);
 				return ERROR_COMMAND_SYNTAX_ERROR;
 			}
 		} else if (dash && !equals) {
 			/* Expecting register range - two numbers separated by a dash: ##-## */
 			*dash = '\0';
-			if (!parse_csr_address(arg, &low)) {
-				LOG_ERROR("Failed to parse '%s' - not a valid decimal or hexadecimal number.",
-					arg);
+			if (!parse_reg_address(arg, reg_type, &low)) {
+				LOG_ERROR("Failed to parse '%s' - not a valid %s register number or name.",
+						arg, reg_type);
 				return ERROR_COMMAND_SYNTAX_ERROR;
 			}
 			const char *high_num_in = dash + 1;
-			if (!parse_csr_address(high_num_in, &high)) {
-				LOG_ERROR("Failed to parse '%s' - not a valid decimal or hexadecimal number.",
-					high_num_in);
+			if (!parse_reg_address(high_num_in, reg_type, &high)) {
+				LOG_ERROR("Failed to parse '%s' - not a valid %s register number or name.",
+						high_num_in, reg_type);
 				return ERROR_COMMAND_SYNTAX_ERROR;
 			}
 			if (high < low) {
@@ -4253,9 +4299,9 @@ static int parse_reg_ranges_impl(struct list_head *ranges, char *args,
 		} else if (!dash && equals) {
 			/* Expecting single register number with textual name specified: ##=name */
 			*equals = '\0';
-			if (!parse_csr_address(arg, &low)) {
-				LOG_ERROR("Failed to parse '%s' - not a valid decimal or hexadecimal number.",
-					arg);
+			if (!parse_reg_address(arg, reg_type, &low)) {
+				LOG_ERROR("Failed to parse '%s' - not a valid %s register number or name.",
+						arg, reg_type);
 				return ERROR_COMMAND_SYNTAX_ERROR;
 			}
 
@@ -4389,6 +4435,24 @@ COMMAND_HANDLER(riscv_hide_csrs)
 
 	for (unsigned int i = 0; i < CMD_ARGC; i++) {
 		ret = parse_reg_ranges(&info->hide_csr, CMD_ARGV[i], "csr", 0xfff);
+		if (ret != ERROR_OK)
+			break;
+	}
+
+	return ret;
+}
+
+COMMAND_HANDLER(riscv_set_gdb_report_csrs)
+{
+	if (CMD_ARGC == 0)
+		return ERROR_COMMAND_SYNTAX_ERROR;
+
+	struct target *target = get_current_target(CMD_CTX);
+	RISCV_INFO(info);
+	int ret = ERROR_OK;
+
+	for (unsigned int i = 0; i < CMD_ARGC; i++) {
+		ret = parse_reg_ranges(&info->gdb_report_csr, CMD_ARGV[i], "csr", 0xfff);
 		if (ret != ERROR_OK)
 			break;
 	}
@@ -5424,7 +5488,7 @@ static const struct command_registration riscv_exec_command_handlers[] = {
 		.name = "expose_csrs",
 		.handler = riscv_set_expose_csrs,
 		.mode = COMMAND_CONFIG,
-		.usage = "n0[-m0|=name0][,n1[-m1|=name1]]...[,n15[-m15|=name15]]",
+		.usage = "{n0|name0}[-{m0|name1}|=alias0]...",
 		.help = "Configure a list of inclusive ranges for CSRs to expose in "
 				"addition to the standard ones. This must be executed before "
 				"`init`."
@@ -5442,10 +5506,20 @@ static const struct command_registration riscv_exec_command_handlers[] = {
 		.name = "hide_csrs",
 		.handler = riscv_hide_csrs,
 		.mode = COMMAND_CONFIG,
-		.usage = "{n0|n-m0}[,n1|n-m1]......",
+		.usage = "{n0|name0}[-{m0|name1}]...",
 		.help = "Configure a list of inclusive ranges for CSRs to hide from gdb. "
 			"Hidden registers are still available, but are not listed in "
 			"gdb target description and `reg` command output. "
+			"This must be executed before `init`."
+	},
+	{
+		.name = "gdb_report_csrs",
+		.handler = riscv_set_gdb_report_csrs,
+		.mode = COMMAND_CONFIG,
+		.usage = "{n0|name0}[-{m0|name1}|=alias0]...",
+		.help = "Configure the CSRs reported to GDB. When this is set, "
+			"CSRs outside this list remain directly accessible but are "
+			"not included in GDB target description or bulk register reads. "
 			"This must be executed before `init`."
 	},
 	{
@@ -5769,6 +5843,7 @@ static void riscv_info_init(struct target *target, struct riscv_info *r)
 	INIT_LIST_HEAD(&r->expose_csr);
 	INIT_LIST_HEAD(&r->expose_custom);
 	INIT_LIST_HEAD(&r->hide_csr);
+	INIT_LIST_HEAD(&r->gdb_report_csr);
 	INIT_LIST_HEAD(&r->expose_nuclei_cpu_core);
 
 	r->vsew64_supported = YNM_MAYBE;

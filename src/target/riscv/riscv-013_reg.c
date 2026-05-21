@@ -347,6 +347,10 @@ int riscv013_reg_examine_all(struct target *target)
 	if (res != ERROR_OK)
 		return res;
 
+	res = riscv_reg_impl_gdb_report_csrs(target);
+	if (res != ERROR_OK)
+		return res;
+
 	riscv_reg_impl_hide_csrs(target);
 
 	return ERROR_OK;

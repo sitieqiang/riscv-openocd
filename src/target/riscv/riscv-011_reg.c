@@ -84,6 +84,9 @@ int riscv011_reg_init_all(struct target *target)
 	if (riscv_reg_impl_expose_csrs(target) != ERROR_OK)
 		return ERROR_FAIL;
 
+	if (riscv_reg_impl_gdb_report_csrs(target) != ERROR_OK)
+		return ERROR_FAIL;
+
 	riscv_reg_impl_hide_csrs(target);
 
 	return ERROR_OK;

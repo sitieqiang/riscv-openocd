@@ -1417,8 +1417,9 @@ static int gdb_get_register_packet(struct connection *connection,
 		return gdb_error(connection, retval);
 
 	if ((reg_list_size <= reg_num) || !reg_list[reg_num] ||
-		!reg_list[reg_num]->exist || reg_list[reg_num]->hidden) {
+		!reg_list[reg_num]->exist) {
 		LOG_ERROR("gdb requested a non-existing register (reg_num=%d)", reg_num);
+		free(reg_list);
 		return gdb_error(connection, ERROR_FAIL);
 	}
 
@@ -1480,7 +1481,7 @@ static int gdb_set_register_packet(struct connection *connection,
 	}
 
 	if ((reg_list_size <= reg_num) || !reg_list[reg_num] ||
-		!reg_list[reg_num]->exist || reg_list[reg_num]->hidden) {
+		!reg_list[reg_num]->exist) {
 		LOG_ERROR("gdb requested a non-existing register (reg_num=%d)", reg_num);
 		free(bin_buf);
 		free(reg_list);

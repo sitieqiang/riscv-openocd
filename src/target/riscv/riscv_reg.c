@@ -137,21 +137,30 @@ static char *init_reg_name(const char *name)
 	return buf;
 }
 
-static void init_custom_csr_names(const struct target *target)
+static void init_custom_csr_names_from_list(const struct target *target,
+		const struct list_head *ranges)
 {
 	RISCV_INFO(info);
 	range_list_t *entry;
 
-	list_for_each_entry(entry, &info->expose_csr, list) {
+	list_for_each_entry(entry, ranges, list) {
 		if (!entry->name)
 			continue;
 		assert(entry->low == entry->high);
 		const unsigned int regno = entry->low + GDB_REGNO_CSR0;
 		assert(regno <= GDB_REGNO_CSR4095);
 		if (info->reg_names[regno])
-			return;
+			continue;
 		info->reg_names[regno] = init_reg_name(entry->name);
 	}
+}
+
+static void init_custom_csr_names(const struct target *target)
+{
+	RISCV_INFO(info);
+
+	init_custom_csr_names_from_list(target, &info->expose_csr);
+	init_custom_csr_names_from_list(target, &info->gdb_report_csr);
 }
 
 static char *init_reg_name_with_prefix(const char *name_prefix,
@@ -717,11 +726,23 @@ int riscv_reg_impl_init_cache(struct target *target)
 	return ERROR_OK;
 }
 
-int riscv_reg_impl_expose_csrs(const struct target *target)
+static bool csr_range_list_contains(const struct list_head *ranges,
+		unsigned int csr_number)
 {
-	RISCV_INFO(info);
 	range_list_t *entry;
-	list_for_each_entry(entry, &info->expose_csr, list) {
+	list_for_each_entry(entry, ranges, list) {
+		if (entry->low <= csr_number && csr_number <= entry->high)
+			return true;
+	}
+
+	return false;
+}
+
+static int riscv_reg_impl_expose_csr_ranges(const struct target *target,
+		const struct list_head *ranges, bool warn_existing)
+{
+	range_list_t *entry;
+	list_for_each_entry(entry, ranges, list) {
 		assert(entry->low <= entry->high);
 		assert(entry->high <= GDB_REGNO_CSR4095 - GDB_REGNO_CSR0);
 		const enum gdb_regno last_regno = GDB_REGNO_CSR0 + entry->high;
@@ -730,9 +751,11 @@ int riscv_reg_impl_expose_csrs(const struct target *target)
 			struct reg * const reg = riscv_reg_impl_cache_entry(target, regno);
 			const unsigned int csr_number = regno - GDB_REGNO_CSR0;
 			if (reg->exist) {
-				LOG_TARGET_WARNING(target,
-						"Not exposing CSR %d: register already exists.",
-						csr_number);
+				if (warn_existing) {
+					LOG_TARGET_WARNING(target,
+							"Not exposing CSR %d: register already exists.",
+							csr_number);
+				}
 				continue;
 			}
 			if (riscv_reg_impl_set_exist(target, regno, /*exist*/ true) != ERROR_OK)
@@ -741,6 +764,39 @@ int riscv_reg_impl_expose_csrs(const struct target *target)
 					csr_number, reg->name);
 		}
 	}
+	return ERROR_OK;
+}
+
+int riscv_reg_impl_expose_csrs(const struct target *target)
+{
+	RISCV_INFO(info);
+	return riscv_reg_impl_expose_csr_ranges(target, &info->expose_csr,
+			true);
+}
+
+int riscv_reg_impl_gdb_report_csrs(const struct target *target)
+{
+	RISCV_INFO(info);
+
+	if (list_empty(&info->gdb_report_csr))
+		return ERROR_OK;
+
+	int result = riscv_reg_impl_expose_csr_ranges(target,
+			&info->gdb_report_csr, false);
+	if (result != ERROR_OK)
+		return result;
+
+	for (enum gdb_regno regno = GDB_REGNO_CSR0;
+			regno <= GDB_REGNO_CSR4095; ++regno) {
+		struct reg * const reg = riscv_reg_impl_cache_entry(target, regno);
+		if (!reg->exist)
+			continue;
+
+		const unsigned int csr_number = regno - GDB_REGNO_CSR0;
+		reg->hidden = !csr_range_list_contains(&info->gdb_report_csr,
+				csr_number);
+	}
+
 	return ERROR_OK;
 }
 

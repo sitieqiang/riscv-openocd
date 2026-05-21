@@ -11310,7 +11310,7 @@ external tools can gather the data efficiently.
 
 @deffn {Config Command} {riscv expose_csrs} n[-m|=name] [...]
 Configure which CSRs to expose in addition to the standard ones. The CSRs to expose
-can be specified as individual register numbers or register ranges (inclusive). For the
+can be specified as individual register numbers, known CSR names, or register ranges (inclusive). For the
 individually listed CSRs, a human-readable name can optionally be set using the @code{n=name}
 syntax, which will get @code{csr_} prepended to it. If no name is provided, the register will be
 named @code{csr<n>}.
@@ -11329,6 +11329,9 @@ riscv expose_csrs 128-132
 
 # Expose a single RISC-V CSR number 1996 under custom name "csr_myregister":
 riscv expose_csrs 1996=myregister
+
+# Expose a known CSR by name:
+riscv expose_csrs mdcause
 @end example
 @end deffn
 
@@ -11356,12 +11359,30 @@ $_TARGETNAME expose_custom 32=myregister
 @end example
 @end deffn
 
+@deffn {Config Command} {riscv gdb_report_csrs} n[-m|=name] [...]
+Configure which CSRs are reported to GDB in the target description and bulk
+register reads. This is useful when the full CSR list is too large for a
+debugger register window. CSRs not listed here remain directly accessible by
+explicit register commands, for example @code{monitor reg csr775}.
+
+The register list can be specified as individual register numbers, known CSR
+names, or inclusive register ranges, using the same syntax as
+@code{riscv expose_csrs}. This command also exposes the listed CSRs if OpenOCD
+would not otherwise expose them.
+
+@example
+# Report only a compact trap-diagnostic CSR set to GDB:
+riscv gdb_report_csrs mcause,mdcause,mtval,mepc
+@end example
+@end deffn
+
 @deffn {Config Command} {riscv hide_csrs} n[-m] [,n1[-m1]] [...]
 The RISC-V Specification defines many CSRs, and we may want to avoid showing
 each CSR to the user, as they may not be relevant to the task at hand. For
 example, we may choose not to show trigger or PMU registers for simple
 debugging scenarios. This command allows to mark individual registers or
-register ranges (inclusive) as "hidden". Such hidden registers won't be
+register ranges (inclusive) as "hidden". Registers can be specified as numbers,
+known CSR names, or inclusive ranges. Such hidden registers won't be
 displayed in GDB or @code{reg} command output.
 
 @example

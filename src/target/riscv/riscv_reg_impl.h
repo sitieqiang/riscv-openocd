@@ -171,6 +171,9 @@ int riscv_reg_impl_expose_csrs(const struct target *target);
 /** Hide additional CSRs, as specified by `riscv_info_t::hide_csr` list. */
 void riscv_reg_impl_hide_csrs(const struct target *target);
 
+/** Limit the CSR list reported to gdb, as specified by `gdb_report_csr`. */
+int riscv_reg_impl_gdb_report_csrs(const struct target *target);
+
 /**
  * If write is true:
  *   return true iff we are guaranteed that the register will contain exactly
