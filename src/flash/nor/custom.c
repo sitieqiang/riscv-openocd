@@ -34,11 +34,17 @@
 #define READ_CMD			(3)
 #define PROBE_CMD			(4)
 
+enum custom_loader_type {
+	CUSTOM_LOADER_FILE,
+	CUSTOM_LOADER_GATESEA_QSPI,
+};
+
 struct flash_bank_msg {
 	bool probed;
 	const struct flash_device *dev;
 	target_addr_t ctrl_base;
 	char *loader_path;
+	enum custom_loader_type loader_type;
 	uint8_t cs;
 	uint8_t *buffer;
 	uint32_t param_0;
@@ -46,6 +52,23 @@ struct flash_bank_msg {
 	bool simulation;
 	uint32_t sectorsize;
 };
+
+static const uint8_t gatesea_qspi_riscv32_bin[] = {
+#include "../../../contrib/loaders/flash/gatesea_qspi/riscv32_gatesea_qspi.inc"
+};
+
+static const uint8_t gatesea_qspi_riscv64_bin[] = {
+#include "../../../contrib/loaders/flash/gatesea_qspi/riscv64_gatesea_qspi.inc"
+};
+
+static const struct flash_device *custom_find_flash_device(uint32_t id)
+{
+	for (const struct flash_device *p = flash_devices; p->name; p++) {
+		if (p->device_id == id)
+			return p;
+	}
+	return NULL;
+}
 
 static int custom_run_algorithm(struct flash_bank *bank)
 {
@@ -61,39 +84,75 @@ static int custom_run_algorithm(struct flash_bank *bank)
 	int xlen = riscv_xlen(target);
 	struct working_area *algorithm_wa = NULL;
 	struct working_area *data_wa = NULL;
-	uint8_t* bin = (uint8_t*)malloc(target->working_area_size);
-	size_t bin_size;
+	uint8_t *bin_alloc = NULL;
+	const uint8_t *bin = NULL;
+	size_t bin_size = 0;
 
-	FILE* fd = fopen((char*)bank_msg->loader_path, "rb");
-	if (NULL == fd) {
-		LOG_INFO("Try to find custom flashloader %s in openocd configuration search dirs.", (char*)bank_msg->loader_path);
-		char* full_path = find_file((char*)bank_msg->loader_path);
-		if (full_path) {
-			fd = fopen(full_path, "rb");
-			LOG_INFO("Using custom flashloader %s found in openocd configuration search dirs.", full_path);
-			free(full_path);
+	if (bank_msg->loader_type == CUSTOM_LOADER_GATESEA_QSPI) {
+		if (xlen == 32) {
+			bin = gatesea_qspi_riscv32_bin;
+			bin_size = sizeof(gatesea_qspi_riscv32_bin);
 		} else {
-			LOG_ERROR("Unable to find flashloader %s in openocd configuration search dirs.", (char*)bank_msg->loader_path);
-			return ERROR_FAIL;
+			bin = gatesea_qspi_riscv64_bin;
+			bin_size = sizeof(gatesea_qspi_riscv64_bin);
 		}
+		LOG_INFO("Using built-in gatesea_qspi custom flashloader");
 	} else {
-		LOG_INFO("Using custom flashloader %s", bank_msg->loader_path);
-	}
-	if (fd) {
-		fseek(fd, 0, SEEK_END);
-		bin_size = ftell(fd);
-		rewind(fd);
-		if (target->working_area_size < bin_size) {
-			LOG_ERROR("working_area_size less than loader_bin_size");
+		FILE *fd = fopen((char *)bank_msg->loader_path, "rb");
+		if (fd == NULL) {
+			LOG_INFO("Try to find custom flashloader %s in openocd configuration search dirs.",
+					(char *)bank_msg->loader_path);
+			char *full_path = find_file((char *)bank_msg->loader_path);
+			if (full_path) {
+				fd = fopen(full_path, "rb");
+				LOG_INFO("Using custom flashloader %s found in openocd configuration search dirs.",
+						full_path);
+				free(full_path);
+			} else {
+				LOG_ERROR("Unable to find flashloader %s in openocd configuration search dirs.",
+						(char *)bank_msg->loader_path);
+				retval = ERROR_FAIL;
+				goto err;
+			}
+		} else {
+			LOG_INFO("Using custom flashloader %s", bank_msg->loader_path);
+		}
+
+		if (fseek(fd, 0, SEEK_END) != 0) {
+			LOG_ERROR("seek loader error");
+			fclose(fd);
+			retval = ERROR_FAIL;
 			goto err;
 		}
-		if (1 != fread(bin, bin_size, 1, fd)) {
+		long file_size = ftell(fd);
+		if (file_size < 0) {
+			LOG_ERROR("tell loader size error");
+			fclose(fd);
+			retval = ERROR_FAIL;
+			goto err;
+		}
+		bin_size = (size_t)file_size;
+		rewind(fd);
+		bin_alloc = malloc(bin_size);
+		if (!bin_alloc) {
+			LOG_ERROR("not enough memory");
+			fclose(fd);
+			retval = ERROR_FAIL;
+			goto err;
+		}
+		if (fread(bin_alloc, 1, bin_size, fd) != bin_size) {
 			LOG_ERROR("read loader error");
+			fclose(fd);
+			retval = ERROR_FAIL;
 			goto err;
 		}
 		fclose(fd);
-	} else {
-		LOG_ERROR("Failed to open loader:%s ", bank_msg->loader_path);
+		bin = bin_alloc;
+	}
+
+	if (target->working_area_size < bin_size) {
+		LOG_ERROR("working_area_size less than loader_bin_size");
+		retval = ERROR_FAIL;
 		goto err;
 	}
 
@@ -116,6 +175,7 @@ static int custom_run_algorithm(struct flash_bank *bank)
 	} else {
 		LOG_WARNING("Couldn't allocate %zd-byte working area.", bin_size);
 		algorithm_wa = NULL;
+		retval = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 	}
 
 	if (algorithm_wa) {
@@ -280,9 +340,7 @@ static int custom_run_algorithm(struct flash_bank *bank)
 	}
 
 err:
-	if (bin) {
-		free(bin);
-	}
+	free(bin_alloc);
 	if (algorithm_wa) {
 		target_free_working_area(target, data_wa);
 		target_free_working_area(target, algorithm_wa);
@@ -312,6 +370,7 @@ FLASH_BANK_COMMAND_HANDLER(custom_flash_bank_command)
 	bank_msg->probed = false;
 	bank_msg->ctrl_base = 0;
 	bank_msg->loader_path = NULL;
+	bank_msg->loader_type = CUSTOM_LOADER_FILE;
 	bank_msg->cs = 0;
 	bank_msg->buffer = NULL;
 	bank_msg->param_0 = 0;
@@ -320,11 +379,19 @@ FLASH_BANK_COMMAND_HANDLER(custom_flash_bank_command)
 	COMMAND_PARSE_ADDRESS(CMD_ARGV[6], bank_msg->ctrl_base);
 	LOG_DEBUG("ASSUMING CUSTOM device at ctrl_base = " TARGET_ADDR_FMT,
 			bank_msg->ctrl_base);
-	bank_msg->loader_path = malloc(strlen(CMD_ARGV[7]));
+	bank_msg->loader_path = malloc(strlen(CMD_ARGV[7]) + 1);
+	if (!bank_msg->loader_path) {
+		free(bank_msg);
+		return ERROR_FAIL;
+	}
 	strcpy((char*)bank_msg->loader_path, CMD_ARGV[7]);
 	for (char *p = bank_msg->loader_path; *p; p++) {
 		if (*p == '\\')
 			*p = '/';
+	}
+	if (strcmp(bank_msg->loader_path, "gatesea_qspi") == 0 ||
+			strcmp(bank_msg->loader_path, "builtin:gatesea_qspi") == 0) {
+		bank_msg->loader_type = CUSTOM_LOADER_GATESEA_QSPI;
 	}
 	bank_msg->simulation = false;
 	bank_msg->sectorsize = 0;
@@ -350,7 +417,7 @@ static int custom_erase(struct flash_bank *bank, unsigned int first,
 	bank_msg->cs = ERASE_CMD;
 	bank_msg->buffer = NULL;
 	bank_msg->param_0 = bank->sectors[first].offset;
-	bank_msg->param_1 = bank->sectors[last].offset + bank_msg->sectorsize;
+	bank_msg->param_1 = bank->sectors[last].offset + bank->sectors[last].size;
 
 	return custom_run_algorithm(bank);
 }
@@ -385,41 +452,12 @@ static int custom_probe(struct flash_bank *bank)
 {
 	struct flash_bank_msg *bank_msg = bank->driver_priv;
 
-	uint32_t id = 0x12345678;
+	uint32_t id;
 	struct flash_sector *sectors;
 
 	if (bank_msg->probed)
 		free(bank->sectors);
 	bank_msg->probed = false;
-
-	bank_msg->dev = NULL;
-	for (const struct flash_device *p = flash_devices; p->name ; p++) {
-		if (p->device_id == id) {
-			bank_msg->dev = p;
-			break;
-		}
-	}
-	if (bank->size == 0)
-		bank->size = bank_msg->dev->size_in_bytes;
-	/* if no sectors, treat whole bank as single sector */
-	if (0 == bank_msg->sectorsize) {
-		bank_msg->sectorsize = bank_msg->dev->sectorsize ?
-		bank_msg->dev->sectorsize : bank->size;
-	}
-	/* create and fill sectors array */
-	bank->num_sectors = bank->size / bank_msg->sectorsize;
-	sectors = malloc(sizeof(struct flash_sector) * bank->num_sectors);
-	if (sectors == NULL) {
-		LOG_ERROR("not enough memory");
-		return ERROR_FAIL;
-	}
-	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
-		sectors[sector].offset = sector * bank_msg->sectorsize;
-		sectors[sector].size = bank_msg->sectorsize;
-		sectors[sector].is_erased = -1;
-		sectors[sector].is_protected = 0;
-	}
-	bank->sectors = sectors;
 
 	bank_msg->cs = PROBE_CMD;
 	bank_msg->buffer = NULL;
@@ -427,8 +465,56 @@ static int custom_probe(struct flash_bank *bank)
 	bank_msg->param_1 = 0;
 
 	id = custom_run_algorithm(bank);
+	if ((int)id < 0) {
+		LOG_ERROR("custom flash probe failed");
+		return ERROR_FAIL;
+	}
 
-	LOG_INFO("Found custom flash device (ID 0x%08" PRIx32 ")", id);
+	bank_msg->dev = custom_find_flash_device(id);
+	if (bank_msg->dev) {
+		LOG_INFO("Found custom flash device '%s' (ID 0x%08" PRIx32 ")",
+				bank_msg->dev->name, bank_msg->dev->device_id);
+		if (bank->size == 0)
+			bank->size = bank_msg->dev->size_in_bytes;
+	} else {
+		LOG_WARNING("Unknown custom flash device (ID 0x%08" PRIx32
+				"), using configured geometry", id);
+		bank_msg->dev = custom_find_flash_device(0x12345678);
+		if (bank->size == 0 && bank_msg->dev)
+			bank->size = bank_msg->dev->size_in_bytes;
+	}
+
+	if (bank->size == 0) {
+		LOG_ERROR("custom flash size is unknown; specify flash bank size");
+		return ERROR_FAIL;
+	}
+
+	/* if no sectors, treat whole bank as single sector */
+	if (0 == bank_msg->sectorsize) {
+		if (bank_msg->dev && bank_msg->dev->sectorsize)
+			bank_msg->sectorsize = bank_msg->dev->sectorsize;
+		else
+			bank_msg->sectorsize = bank->size;
+	}
+	if (bank_msg->sectorsize == 0) {
+		LOG_ERROR("custom flash sector size is unknown");
+		return ERROR_FAIL;
+	}
+	/* create and fill sectors array */
+	bank->num_sectors = (bank->size + bank_msg->sectorsize - 1) / bank_msg->sectorsize;
+	sectors = malloc(sizeof(struct flash_sector) * bank->num_sectors);
+	if (sectors == NULL) {
+		LOG_ERROR("not enough memory");
+		return ERROR_FAIL;
+	}
+	for (unsigned int sector = 0; sector < bank->num_sectors; sector++) {
+		sectors[sector].offset = sector * bank_msg->sectorsize;
+		uint32_t remaining = bank->size - sectors[sector].offset;
+		sectors[sector].size = MIN(bank_msg->sectorsize, remaining);
+		sectors[sector].is_erased = -1;
+		sectors[sector].is_protected = 0;
+	}
+	bank->sectors = sectors;
 	bank_msg->probed = true;
 	return ERROR_OK;
 }
