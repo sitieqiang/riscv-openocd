@@ -33,6 +33,7 @@
 #define WRITE_CMD			(2)
 #define READ_CMD			(3)
 #define PROBE_CMD			(4)
+#define CUSTOM_MAX_TRANSFER_CHUNK	(64 * 1024)
 
 enum custom_loader_type {
 	CUSTOM_LOADER_FILE,
@@ -158,18 +159,34 @@ static int custom_run_algorithm(struct flash_bank *bank)
 
 	unsigned data_wa_size = 0;
 	if (target_alloc_working_area(target, bin_size, &algorithm_wa) == ERROR_OK) {
+		LOG_OUTPUT("Flash loader upload started: %zu bytes to " TARGET_ADDR_FMT "\n",
+				bin_size, algorithm_wa->address);
 		retval = target_write_buffer(target, algorithm_wa->address, bin_size, bin);
 		if (retval != ERROR_OK) {
 			LOG_ERROR("Failed to write code to " TARGET_ADDR_FMT ": %d",
 					algorithm_wa->address, retval);
 			target_free_working_area(target, algorithm_wa);
 			algorithm_wa = NULL;
-		} else if ((bank_msg->cs == WRITE_CMD) || (bank_msg->cs == READ_CMD)) {
-			data_wa_size = MIN(target->working_area_size - algorithm_wa->size, bank_msg->param_0);
-			while (1) {
-				if (target_alloc_working_area_try(target, data_wa_size, &data_wa) == ERROR_OK)
-					break;
-				data_wa_size = data_wa_size * 3 / 4;
+		} else {
+			LOG_OUTPUT("Flash loader upload completed\n");
+			if ((bank_msg->cs == WRITE_CMD) || (bank_msg->cs == READ_CMD)) {
+				data_wa_size = MIN(target->working_area_size - algorithm_wa->size, bank_msg->param_0);
+				data_wa_size = MIN(data_wa_size, CUSTOM_MAX_TRANSFER_CHUNK);
+				if (data_wa_size == 0) {
+					LOG_ERROR("no working area available for custom flash data buffer");
+					retval = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+					goto err;
+				}
+				while (1) {
+					if (target_alloc_working_area_try(target, data_wa_size, &data_wa) == ERROR_OK)
+						break;
+					data_wa_size = data_wa_size * 3 / 4;
+					if (data_wa_size == 0) {
+						LOG_ERROR("no working area available for custom flash data buffer");
+						retval = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
+						goto err;
+					}
+				}
 			}
 		}
 	} else {
@@ -196,6 +213,9 @@ static int custom_run_algorithm(struct flash_bank *bank)
 		case ERASE_CMD:
 			first_addr = bank_msg->param_0;
 			end_addr = bank_msg->param_1;
+			LOG_OUTPUT("Flash erase started: offset 0x%08" PRIx32 " .. 0x%08" PRIx32
+					" (%" PRIu32 " bytes)\n",
+					first_addr, end_addr, end_addr - first_addr);
 			buf_set_u64(reg_params[0].value, 0, xlen, bank_msg->cs);
 			buf_set_u64(reg_params[1].value, 0, xlen, bank_msg->ctrl_base);
 			buf_set_u64(reg_params[2].value, 0, xlen, first_addr);
@@ -222,11 +242,22 @@ static int custom_run_algorithm(struct flash_bank *bank)
 				retval = ERROR_FAIL;
 				goto err;
 			}
+			LOG_OUTPUT("Flash erase completed: offset 0x%08" PRIx32 " .. 0x%08" PRIx32 "\n",
+					first_addr, end_addr);
 			break;
 		case WRITE_CMD:
 			count = bank_msg->param_0;
 			offset = bank_msg->param_1;
 			cur_count = 0;
+			uint32_t total_count = count;
+			uint32_t written_count = 0;
+			uint32_t last_progress = UINT32_MAX;
+			if (total_count > 0) {
+				last_progress = 0;
+				LOG_OUTPUT("Flash write started: %" PRIu32 " bytes, chunk %" PRIu32 " bytes\n",
+						total_count, data_wa_size);
+				LOG_OUTPUT("Flash write progress: 0%% (0/%" PRIu32 " bytes)\n", total_count);
+			}
 			while (count > 0) {
 				cur_count = MIN(count, data_wa_size);
 				buf_set_u64(reg_params[0].value, 0, xlen, bank_msg->cs);
@@ -264,12 +295,30 @@ static int custom_run_algorithm(struct flash_bank *bank)
 				bank_msg->buffer += cur_count;
 				offset += cur_count;
 				count -= cur_count;
+				written_count += cur_count;
+				if (total_count > 0) {
+					uint32_t progress = (uint32_t)((uint64_t)written_count * 100 / total_count);
+					if (progress == 100 || progress >= last_progress + 5) {
+						LOG_OUTPUT("Flash write progress: %" PRIu32 "%% (%" PRIu32 "/%" PRIu32 " bytes)\n",
+								progress, written_count, total_count);
+						last_progress = progress;
+					}
+				}
 			}
 			break;
 		case READ_CMD:
 			count = bank_msg->param_0;
 			offset = bank_msg->param_1;
 			cur_count = 0;
+			uint32_t read_total_count = count;
+			uint32_t read_done_count = 0;
+			uint32_t read_last_progress = UINT32_MAX;
+			if (read_total_count > 0) {
+				read_last_progress = 0;
+				LOG_OUTPUT("Flash read started: %" PRIu32 " bytes, chunk %" PRIu32 " bytes\n",
+						read_total_count, data_wa_size);
+				LOG_OUTPUT("Flash read progress: 0%% (0/%" PRIu32 " bytes)\n", read_total_count);
+			}
 			while (count > 0) {
 				cur_count = MIN(count, data_wa_size);
 				buf_set_u64(reg_params[0].value, 0, xlen, bank_msg->cs);
@@ -307,6 +356,15 @@ static int custom_run_algorithm(struct flash_bank *bank)
 				bank_msg->buffer += cur_count;
 				offset += cur_count;
 				count -= cur_count;
+				read_done_count += cur_count;
+				if (read_total_count > 0) {
+					uint32_t progress = (uint32_t)((uint64_t)read_done_count * 100 / read_total_count);
+					if (progress == 100 || progress >= read_last_progress + 5) {
+						LOG_OUTPUT("Flash read progress: %" PRIu32 "%% (%" PRIu32 "/%" PRIu32 " bytes)\n",
+								progress, read_done_count, read_total_count);
+						read_last_progress = progress;
+					}
+				}
 			}
 			break;
 		case PROBE_CMD:
@@ -448,6 +506,55 @@ static int custom_read(struct flash_bank *bank, uint8_t *buffer,
 	return custom_run_algorithm(bank);
 }
 
+static int custom_verify(struct flash_bank *bank, const uint8_t *buffer,
+		uint32_t offset, uint32_t count)
+{
+	uint8_t *readback;
+	unsigned int diffs = 0;
+
+	if (count == 0)
+		return ERROR_OK;
+
+	readback = malloc(count);
+	if (!readback)
+		return ERROR_FAIL;
+
+	LOG_OUTPUT("Flash verify started: %" PRIu32 " bytes\n", count);
+
+	int retval = custom_read(bank, readback, offset, count);
+	if (retval != ERROR_OK) {
+		free(readback);
+		return retval;
+	}
+
+	for (uint32_t i = 0; i < count; i++) {
+		if (readback[i] == buffer[i])
+			continue;
+
+		if (diffs < 128) {
+			LOG_ERROR("diff %u address " TARGET_ADDR_FMT
+					". Was 0x%02" PRIx8 " instead of 0x%02" PRIx8,
+					diffs,
+					bank->base + offset + i,
+					readback[i],
+					buffer[i]);
+		} else if (diffs == 128) {
+			LOG_ERROR("More than 128 errors, the rest are not printed.");
+		}
+		diffs++;
+	}
+
+	free(readback);
+
+	if (diffs > 0) {
+		LOG_ERROR("Flash verify failed: %u differences found", diffs);
+		return ERROR_FAIL;
+	}
+
+	LOG_OUTPUT("Flash verify completed: %" PRIu32 " bytes\n", count);
+	return ERROR_OK;
+}
+
 static int custom_probe(struct flash_bank *bank)
 {
 	struct flash_bank_msg *bank_msg = bank->driver_priv;
@@ -559,6 +666,7 @@ const struct flash_driver custom_flash = {
 	.protect = custom_protect,
 	.write = custom_write,
 	.read = custom_read,
+	.verify = custom_verify,
 	.probe = custom_probe,
 	.auto_probe = custom_auto_probe,
 	.erase_check = default_flash_blank_check,

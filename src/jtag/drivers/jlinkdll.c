@@ -53,6 +53,10 @@ typedef int (*jlinkdll_jtag_store_get_data_t)(const uint8_t *data,
 typedef uint32_t (*jlinkdll_jtag_get_device_id_t)(int index);
 typedef uint32_t (*jlinkdll_jtag_get_u32_t)(int bitpos);
 typedef int (*jlinkdll_jtag_sync_bits_t)(void);
+typedef int (*jlinkdll_read_mem_t)(uint32_t addr, uint32_t num_bytes,
+		void *data);
+typedef int (*jlinkdll_write_mem_t)(uint32_t addr, uint32_t num_bytes,
+		const void *data);
 typedef void (*jlinkdll_set_pin_t)(void);
 
 struct jlinkdll_api {
@@ -77,6 +81,8 @@ struct jlinkdll_api {
 	jlinkdll_jtag_get_device_id_t jtag_get_device_id;
 	jlinkdll_jtag_get_u32_t jtag_get_u32;
 	jlinkdll_jtag_sync_bits_t jtag_sync_bits;
+	jlinkdll_read_mem_t read_mem;
+	jlinkdll_write_mem_t write_mem;
 	jlinkdll_set_pin_t set_reset;
 	jlinkdll_set_pin_t clear_reset;
 	jlinkdll_set_pin_t set_trst;
@@ -192,6 +198,8 @@ static int jlinkdll_load_api(void)
 			"JLINKARM_JTAG_GetDeviceId");
 	LOAD_OPTIONAL(jtag_get_u32, jlinkdll_jtag_get_u32_t,
 			"JLINKARM_JTAG_GetU32");
+	LOAD_OPTIONAL(read_mem, jlinkdll_read_mem_t, "JLINKARM_ReadMem");
+	LOAD_OPTIONAL(write_mem, jlinkdll_write_mem_t, "JLINKARM_WriteMem");
 
 	LOAD_OPTIONAL(exec_command, jlinkdll_exec_command_t,
 			"JLINKARM_ExecCommand");
@@ -981,6 +989,60 @@ static int jlinkdll_reset(int trst, int srst)
 	return jlinkdll_flush();
 }
 
+static int jlinkdll_read_memory(target_addr_t address, uint32_t size,
+		uint8_t *buffer)
+{
+	int ret;
+
+	if (!jlinkdll_opened || !jlinkdll.read_mem)
+		return ERROR_JTAG_NOT_IMPLEMENTED;
+
+	if (address > UINT32_MAX || size > UINT32_MAX - (uint32_t)address + 1)
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+
+	ret = jlinkdll_flush();
+	if (ret != ERROR_OK)
+		return ret;
+
+	LOG_DEBUG("J-Link DLL fast memory read: %" PRIu32 " bytes at 0x%08" PRIx32,
+			size, (uint32_t)address);
+	ret = jlinkdll.read_mem((uint32_t)address, size, buffer);
+	if (ret < 0) {
+		LOG_DEBUG("JLINKARM_ReadMem(0x%08" PRIx32 ", %" PRIu32 ") failed: %d",
+				(uint32_t)address, size, ret);
+		return ERROR_JTAG_DEVICE_ERROR;
+	}
+
+	return ERROR_OK;
+}
+
+static int jlinkdll_write_memory(target_addr_t address, uint32_t size,
+		const uint8_t *buffer)
+{
+	int ret;
+
+	if (!jlinkdll_opened || !jlinkdll.write_mem)
+		return ERROR_JTAG_NOT_IMPLEMENTED;
+
+	if (address > UINT32_MAX || size > UINT32_MAX - (uint32_t)address + 1)
+		return ERROR_COMMAND_ARGUMENT_INVALID;
+
+	ret = jlinkdll_flush();
+	if (ret != ERROR_OK)
+		return ret;
+
+	LOG_DEBUG("J-Link DLL fast memory write: %" PRIu32 " bytes at 0x%08" PRIx32,
+			size, (uint32_t)address);
+	ret = jlinkdll.write_mem((uint32_t)address, size, buffer);
+	if (ret < 0) {
+		LOG_DEBUG("JLINKARM_WriteMem(0x%08" PRIx32 ", %" PRIu32 ") failed: %d",
+				(uint32_t)address, size, ret);
+		return ERROR_JTAG_DEVICE_ERROR;
+	}
+
+	return ERROR_OK;
+}
+
 static int jlinkdll_init(void)
 {
 	const char *open_error;
@@ -1245,5 +1307,7 @@ struct adapter_driver jlinkdll_adapter_driver = {
 	.speed = &jlinkdll_speed,
 	.khz = &jlinkdll_khz,
 	.speed_div = &jlinkdll_speed_div,
+	.read_memory = &jlinkdll_read_memory,
+	.write_memory = &jlinkdll_write_memory,
 	.jtag_ops = &jlinkdll_interface,
 };

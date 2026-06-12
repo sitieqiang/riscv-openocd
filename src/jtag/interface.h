@@ -338,6 +338,22 @@ struct adapter_driver {
 	 */
 	int (*poll_trace)(uint8_t *buf, size_t *size);
 
+	/**
+	 * Optional high-level target memory write helper provided by adapters
+	 * that can write target memory more efficiently than generic JTAG/SWD
+	 * transactions. Callers must fall back to target memory access if this
+	 * callback is unavailable or returns an error.
+	 */
+	int (*write_memory)(target_addr_t address, uint32_t size, const uint8_t *buffer);
+
+	/**
+	 * Optional fast path for adapters, such as vendor DLL based probes,
+	 * that can read target memory more efficiently than generic JTAG/SWD
+	 * transactions. Callers must fall back to target memory access if this
+	 * callback is unavailable or returns an error.
+	 */
+	int (*read_memory)(target_addr_t address, uint32_t size, uint8_t *buffer);
+
 	/** Low-level JTAG APIs */
 	struct jtag_interface *jtag_ops;
 

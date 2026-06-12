@@ -34,7 +34,8 @@
 #include <helper/nvp.h>
 #include <helper/time_support.h>
 #include <jtag/jtag.h>
-#include <flash/nor/core.h>
+#include <jtag/interface.h>
+#include <flash/nor/imp.h>
 
 #include "target.h"
 #include "target_type.h"
@@ -51,6 +52,10 @@
 
 /* default halt wait timeout (ms) */
 #define DEFAULT_HALT_TIMEOUT 5000
+#define ADAPTER_FAST_MEMORY_READ_MIN_SIZE 256
+#define ADAPTER_FAST_MEMORY_WRITE_MIN_SIZE 256
+
+extern struct adapter_driver *adapter_driver;
 
 static int target_read_buffer_default(struct target *target, target_addr_t address,
 		uint32_t count, uint8_t *buffer);
@@ -2374,6 +2379,16 @@ int target_write_buffer(struct target *target, target_addr_t address, uint32_t s
 		return ERROR_FAIL;
 	}
 
+	if (adapter_driver && adapter_driver->write_memory &&
+			size >= ADAPTER_FAST_MEMORY_WRITE_MIN_SIZE &&
+			strcmp(target_type_name(target), "riscv") == 0 &&
+			address <= UINT32_MAX && size <= UINT32_MAX - (uint32_t)address + 1) {
+		int retval = adapter_driver->write_memory(address, size, buffer);
+		if (retval == ERROR_OK)
+			return ERROR_OK;
+		LOG_DEBUG("adapter fast memory write failed, falling back to target write_buffer");
+	}
+
 	return target->type->write_buffer(target, address, size, buffer);
 }
 
@@ -2437,6 +2452,16 @@ int target_read_buffer(struct target *target, target_addr_t address, uint32_t si
 				  address,
 				  size);
 		return ERROR_FAIL;
+	}
+
+	if (adapter_driver && adapter_driver->read_memory &&
+			size >= ADAPTER_FAST_MEMORY_READ_MIN_SIZE &&
+			strcmp(target_type_name(target), "riscv") == 0 &&
+			address <= UINT32_MAX && size <= UINT32_MAX - (uint32_t)address + 1) {
+		int retval = adapter_driver->read_memory(address, size, buffer);
+		if (retval == ERROR_OK)
+			return ERROR_OK;
+		LOG_DEBUG("adapter fast memory read failed, falling back to target read_buffer");
 	}
 
 	return target->type->read_buffer(target, address, size, buffer);
@@ -3903,6 +3928,26 @@ static COMMAND_HELPER(handle_verify_image_command_internal, enum verify_mode ver
 		}
 
 		if (verify >= IMAGE_VERIFY) {
+			struct flash_bank *bank = NULL;
+			retval = get_flash_bank_by_addr(target, image.sections[i].base_address, false, &bank);
+			if (retval != ERROR_OK) {
+				free(buffer);
+				break;
+			}
+
+			if (bank && bank->driver && strcmp(bank->driver->name, "custom") == 0) {
+				target_addr_t section_end = image.sections[i].base_address + buf_cnt - 1;
+				if (section_end <= bank->base + bank->size - 1) {
+					retval = flash_driver_verify(bank, buffer,
+							image.sections[i].base_address - bank->base, buf_cnt);
+					free(buffer);
+					if (retval != ERROR_OK)
+						break;
+					image_size += buf_cnt;
+					continue;
+				}
+			}
+
 			/* calculate checksum of image */
 			retval = image_calculate_checksum(buffer, buf_cnt, &checksum);
 			if (retval != ERROR_OK) {
