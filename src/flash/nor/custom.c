@@ -33,7 +33,7 @@
 #define WRITE_CMD			(2)
 #define READ_CMD			(3)
 #define PROBE_CMD			(4)
-#define CUSTOM_MAX_TRANSFER_CHUNK	(64 * 1024)
+#define CUSTOM_DEFAULT_TRANSFER_CHUNK	(256 * 1024)
 
 enum custom_loader_type {
 	CUSTOM_LOADER_FILE,
@@ -52,6 +52,7 @@ struct flash_bank_msg {
 	uint32_t param_1;
 	bool simulation;
 	uint32_t sectorsize;
+	uint32_t chunksize;
 };
 
 static const uint8_t gatesea_qspi_riscv32_bin[] = {
@@ -171,12 +172,14 @@ static int custom_run_algorithm(struct flash_bank *bank)
 			LOG_OUTPUT("Flash loader upload completed\n");
 			if ((bank_msg->cs == WRITE_CMD) || (bank_msg->cs == READ_CMD)) {
 				data_wa_size = MIN(target->working_area_size - algorithm_wa->size, bank_msg->param_0);
-				data_wa_size = MIN(data_wa_size, CUSTOM_MAX_TRANSFER_CHUNK);
+				data_wa_size = MIN(data_wa_size, bank_msg->chunksize);
 				if (data_wa_size == 0) {
 					LOG_ERROR("no working area available for custom flash data buffer");
 					retval = ERROR_TARGET_RESOURCE_NOT_AVAILABLE;
 					goto err;
 				}
+				LOG_OUTPUT("Flash data buffer allocation started: %" PRIu32 " bytes\n",
+						data_wa_size);
 				while (1) {
 					if (target_alloc_working_area_try(target, data_wa_size, &data_wa) == ERROR_OK)
 						break;
@@ -187,6 +190,8 @@ static int custom_run_algorithm(struct flash_bank *bank)
 						goto err;
 					}
 				}
+				LOG_OUTPUT("Flash data buffer allocated: %" PRIu32 " bytes at " TARGET_ADDR_FMT "\n",
+						data_wa_size, data_wa->address);
 			}
 		}
 	} else {
@@ -453,6 +458,7 @@ FLASH_BANK_COMMAND_HANDLER(custom_flash_bank_command)
 	}
 	bank_msg->simulation = false;
 	bank_msg->sectorsize = 0;
+	bank_msg->chunksize = CUSTOM_DEFAULT_TRANSFER_CHUNK;
 	for (unsigned int i = 8; i < CMD_ARGC; i++) {
 		if(strcmp(CMD_ARGV[i], "simulation") == 0) {
 			bank_msg->simulation = true;
@@ -462,6 +468,16 @@ FLASH_BANK_COMMAND_HANDLER(custom_flash_bank_command)
 			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[i]+strlen("sectorsize="), bank_msg->sectorsize);
 			LOG_DEBUG("Custom flash sectorsize is %x", bank_msg->sectorsize);
 		}
+		if(strncmp(CMD_ARGV[i], "chunksize=", strlen("chunksize=")) == 0) {
+			COMMAND_PARSE_NUMBER(u32, CMD_ARGV[i]+strlen("chunksize="), bank_msg->chunksize);
+			LOG_DEBUG("Custom flash transfer chunk size is %x", bank_msg->chunksize);
+		}
+	}
+	if (bank_msg->chunksize == 0) {
+		LOG_ERROR("custom flash chunksize must be greater than zero");
+		free(bank_msg->loader_path);
+		free(bank_msg);
+		return ERROR_COMMAND_ARGUMENT_INVALID;
 	}
 
 	return ERROR_OK;

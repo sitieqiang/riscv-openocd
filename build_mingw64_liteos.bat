@@ -43,7 +43,7 @@ echo.
 set "HOME=%CD%\.tmp"
 set "CHERE_INVOKING=1"
 
-"%MSYS2_BASH%" -lc "set -e; export PATH=/mingw64/bin:/usr/bin:$PATH; mkdir -p .tmp \"$BUILD_DIR\"; tmpdir=$(pwd)/.tmp; export TMPDIR=$tmpdir TEMP=$tmpdir TMP=$tmpdir; need_bootstrap=0; for f in configure build-aux/config.guess build-aux/config.sub build-aux/ltmain.sh build-aux/compile build-aux/missing build-aux/install-sh; do if [ ! -f \"$f\" ]; then need_bootstrap=1; fi; done; if [ \"$need_bootstrap\" != \"0\" ]; then ./bootstrap nosubmodule; fi; cd \"$BUILD_DIR\"; ../configure $CONFIGURE_FLAGS $EXTRA_CONFIGURE_FLAGS; if [ \"$CLEAN_BUILD\" != \"0\" ]; then make clean; fi; if [ \"$GENERATE_COMPILE_COMMANDS\" != \"0\" ] && command -v compiledb >/dev/null 2>&1; then set +e; make -j\"$JOBS\" V=1 2>&1 | tee compile_commands.build.log; make_status=${PIPESTATUS[0]}; set -e; echo Generating compile_commands.json; if compiledb -p compile_commands.build.log -f -o compile_commands.json; then if [ \"$COPY_COMPILE_COMMANDS_TO_ROOT\" != \"0\" ]; then cp compile_commands.json ../compile_commands.json || echo WARNING: failed to copy compile_commands.json to repository root.; fi; else echo WARNING: failed to generate compile_commands.json.; fi; exit $make_status; else if [ \"$GENERATE_COMPILE_COMMANDS\" != \"0\" ]; then echo WARNING: compiledb not found in MSYS2. Install mingw-w64-x86_64-compiledb or set GENERATE_COMPILE_COMMANDS=0.; fi; make -j\"$JOBS\"; fi"
+"%MSYS2_BASH%" -lc "./build_mingw64_liteos.sh"
 set "BUILD_RESULT=%ERRORLEVEL%"
 
 if "%BUILD_RESULT%"=="0" (
